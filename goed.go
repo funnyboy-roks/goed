@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"regexp"
 	"slices"
 	"strings"
 
 	// "log"
 	"os"
+	os_exec "os/exec"
 )
 
 type Mode int
@@ -21,6 +23,7 @@ const (
 var buffer = []string{}
 var mode = ModeCommand
 var curr_line = -1
+var prompt = ""
 
 func (mode Mode) S() string {
 	switch mode {
@@ -56,7 +59,7 @@ func parseCommand(s string) (rangeLow int, rangeHigh int, command string, hasRan
 
 	if s[i] != ',' {
 		if i == 0 {
-			return curr_line + 1, curr_line + 1, s, false
+			return curr_line, curr_line, s, false
 		} else {
 			return rangeLow, rangeLow, s[i:], false
 		}
@@ -94,8 +97,17 @@ func getSize() int {
 func exec(cmdStr string) bool {
 	if mode == ModeCommand {
 		low, high, command, hasRange := parseCommand(cmdStr)
-		fmt.Printf("(%d, %d, %s)\n", low, high, command)
-		switch command {
+		// fmt.Printf("(%d, %d, %s)\n", low, high, command)
+        split := strings.Split(command, " ")
+        prefix := split[0]
+        args := split[1:]
+		switch prefix {
+		case "P":
+			if hasRange {
+				fmt.Println("?")
+				break
+			}
+            prompt = "*"
 		case "a":
 			if hasRange {
 				fmt.Println("?")
@@ -114,6 +126,8 @@ func exec(cmdStr string) bool {
 			if low <= curr_line && curr_line <= high {
 				curr_line = low - 1
 			}
+		case "#":
+            break
 		case "n":
 			if len(buffer) == 0 {
 				break
@@ -127,13 +141,38 @@ func exec(cmdStr string) bool {
 				break
 			}
 			return false
+		case "r":
+			if hasRange {
+				fmt.Println("?")
+				break
+			}
+            rest := strings.Join(args, " ");
+            if rest[0] == '!' {
+                command := os_exec.Command("bash", "-c", rest[1:])
+                command.Stderr = os.Stderr
+                command.Stdin = os.Stdin
+                output, err := command.Output()
+                if err != nil {
+                    fmt.Printf("Err: %s\n", err);
+                    break
+                }
+                split := strings.Split(string(output), "\n")
+                before_size := getSize()
+                for i := range split {
+                    curr_line += 1
+                    buffer = slices.Insert(buffer, curr_line, split[i])
+                }
+                fmt.Printf("%d\n", getSize() - before_size);
+                break
+            }
+			fmt.Println("?")
 		case "":
 			if hasRange {
 				if low != high {
 					fmt.Println("?")
 					break
 				}
-				curr_line = low - 1
+				curr_line = low
 			} else {
 				curr_line += 1
 				if curr_line >= len(buffer) {
@@ -143,6 +182,35 @@ func exec(cmdStr string) bool {
 				fmt.Println(buffer[curr_line])
 			}
 		default:
+            if command[0] == '!' {
+                command := os_exec.Command("bash", "-c", command[1:])
+                command.Stdout = os.Stdout
+                command.Stderr = os.Stderr
+                command.Stdin = os.Stdin
+                if err := command.Run(); err != nil {
+                    fmt.Printf("Err: %s\n", err);
+                }
+                fmt.Println("!")
+                break
+            }
+            if command[0] == 's' && command[1] == '/' {
+                cmd := command[2:]
+                mid := strings.IndexByte(cmd, '/');
+                needle := cmd[:mid]
+                repl := cmd[mid + 1:]
+                reg, err := regexp.CompilePOSIX(needle)
+                if err != nil {
+                    fmt.Println("?")
+                    break
+                }
+                fmt.Printf("needle = %s\n", needle)
+                fmt.Printf("reg = %s\n", reg)
+                fmt.Printf("repl = %s\n", repl)
+                for i := low; i < high+1; i += 1 {
+                    buffer[i] = reg.ReplaceAllString(buffer[i], repl)
+                }
+                break
+            }
 			fmt.Println("?")
 		}
 	} else if mode == ModeAppend {
@@ -187,7 +255,9 @@ func main() {
 	}
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		// fmt.Printf("[%s] ", mode.S())
+        if mode == ModeCommand {
+            fmt.Printf("%s", prompt)
+        }
 		text, _ := reader.ReadString('\n')
 		text = strings.TrimSpace(text)
 		if !exec(text) {
